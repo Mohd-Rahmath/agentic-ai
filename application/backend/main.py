@@ -1,12 +1,10 @@
 import os
 import base64
-from typing import Optional
 
-import anthropic
+from openai import OpenAI
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 
 from rag_engine import RAGEngine
 
@@ -21,7 +19,12 @@ app.add_middleware(
 )
 
 rag = RAGEngine()
-claude = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+client = OpenAI(
+    api_key=os.environ.get("OPENROUTER_API_KEY"),
+    base_url="https://openrouter.ai/api/v1",
+)
+
+MODEL = "meta-llama/llama-3.2-11b-vision-instruct:free"
 
 SYSTEM_PROMPT = """You are an expert image analyst. When given an image:
 1. Identify what is shown (objects, scenes, people, text, etc.)
@@ -48,23 +51,23 @@ async def analyze_image(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Image too large. Max 10MB.")
 
     b64_image = base64.standard_b64encode(image_bytes).decode("utf-8")
-    media_type = file.content_type
+    data_url = f"data:{file.content_type};base64,{b64_image}"
 
     # Step 1: Quick first-pass description to use as RAG query
-    quick_msg = claude.messages.create(
-        model="claude-sonnet-4-6",
+    quick_msg = client.chat.completions.create(
+        model=MODEL,
         max_tokens=200,
         messages=[
             {
                 "role": "user",
                 "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64_image}},
+                    {"type": "image_url", "image_url": {"url": data_url}},
                     {"type": "text", "text": "In one sentence, what is shown in this image?"},
                 ],
             }
         ],
     )
-    quick_desc = quick_msg.content[0].text.strip()
+    quick_desc = quick_msg.choices[0].message.content.strip()
 
     # Step 2: Retrieve similar past analyses from RAG
     similar = rag.retrieve_similar(quick_desc, top_k=3)
@@ -76,21 +79,21 @@ async def analyze_image(file: UploadFile = File(...)):
         for i, s in enumerate(similar, 1):
             rag_context += f"{i}. [{s['filename']}]: {s['description'][:200]}\n"
 
-    full_msg = claude.messages.create(
-        model="claude-sonnet-4-6",
+    full_msg = client.chat.completions.create(
+        model=MODEL,
         max_tokens=1024,
-        system=SYSTEM_PROMPT,
         messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64_image}},
+                    {"type": "image_url", "image_url": {"url": data_url}},
                     {"type": "text", "text": f"Analyze this image in detail.{rag_context}"},
                 ],
-            }
+            },
         ],
     )
-    analysis = full_msg.content[0].text.strip()
+    analysis = full_msg.choices[0].message.content.strip()
 
     # Step 4: Store analysis in RAG vector store
     doc_id = rag.store(analysis, file.filename or "unknown")
