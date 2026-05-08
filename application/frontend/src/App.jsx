@@ -3,7 +3,7 @@ import ImageUpload from "./components/ImageUpload.jsx";
 import ResultDisplay from "./components/ResultDisplay.jsx";
 import HistoryPanel from "./components/HistoryPanel.jsx";
 
-const API = "/api";
+const API = "http://localhost:8000";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("analyze");
