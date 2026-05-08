@@ -27,7 +27,7 @@ client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
 )
 
-MODEL = "qwen/qwen-2-vl-7b-instruct:free"
+MODEL = "inclusionai/ring-2.6-1t:free"
 
 SYSTEM_PROMPT = """You are an expert image analyst. When given an image:
 1. Identify what is shown (objects, scenes, people, text, etc.)
