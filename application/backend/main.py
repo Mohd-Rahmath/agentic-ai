@@ -27,7 +27,7 @@ client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
 )
 
-MODEL = "meta-llama/llama-3.2-11b-vision-instruct:free"
+MODEL = "qwen/qwen-2-vl-7b-instruct:free"
 
 SYSTEM_PROMPT = """You are an expert image analyst. When given an image:
 1. Identify what is shown (objects, scenes, people, text, etc.)
