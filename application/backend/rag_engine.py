@@ -5,11 +5,11 @@ from datetime import datetime
 
 
 class RAGEngine:
-    def __init__(self, persist_dir: str = "./chroma_db"):
+    def __init__(self, persist_dir: str = "./chroma_db", collection_name: str = "image_analyses"):
         self.client = chromadb.PersistentClient(path=persist_dir)
         self.embed_fn = DefaultEmbeddingFunction()
         self.collection = self.client.get_or_create_collection(
-            name="image_analyses",
+            name=collection_name,
             embedding_function=self.embed_fn,
             metadata={"hnsw:space": "cosine"},
         )

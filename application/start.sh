@@ -6,13 +6,27 @@ echo "=== RAG Image Recognition Agent ==="
 # Backend
 echo "[1/2] Starting Python backend..."
 cd backend
+if [ ! -d .venv ]; then
+  echo "  -> Creating Python virtual environment (.venv)..."
+  python3 -m venv .venv 2>/dev/null || python -m venv .venv
+fi
+if [ -f .venv/bin/activate ]; then
+  # shellcheck source=/dev/null
+  . .venv/bin/activate
+elif [ -f .venv/Scripts/activate ]; then
+  # shellcheck source=/dev/null
+  . .venv/Scripts/activate
+else
+  echo "  -> ERROR: Could not activate .venv (missing activate script)" >&2
+  exit 1
+fi
 if [ ! -f .env ]; then
   cp .env.example .env
-  echo "  -> Created .env — set your ANTHROPIC_API_KEY inside it"
+  echo "  -> Created .env — set your OPENROUTER_API_KEY inside it"
 fi
 pip install -r requirements.txt -q
 export $(grep -v '^#' .env | xargs) 2>/dev/null || true
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload &
+python main.py &
 BACKEND_PID=$!
 echo "  -> Backend running at http://localhost:8000 (PID $BACKEND_PID)"
 

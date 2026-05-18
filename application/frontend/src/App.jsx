@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from "react";
 import ImageUpload from "./components/ImageUpload.jsx";
 import ResultDisplay from "./components/ResultDisplay.jsx";
 import HistoryPanel from "./components/HistoryPanel.jsx";
+import DocumentUpload from "./components/DocumentUpload.jsx";
+import DocumentResult from "./components/DocumentResult.jsx";
 
 const API = "http://localhost:8000";
 
@@ -12,6 +14,12 @@ export default function App() {
   const [error, setError] = useState(null);
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  const [docLoading, setDocLoading] = useState(false);
+  const [docResult, setDocResult] = useState(null);
+  const [docError, setDocError] = useState(null);
+  const [docHistory, setDocHistory] = useState([]);
+  const [docHistoryLoading, setDocHistoryLoading] = useState(false);
 
   const fetchHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -26,9 +34,44 @@ export default function App() {
     }
   }, []);
 
+  const fetchDocHistory = useCallback(async () => {
+    setDocHistoryLoading(true);
+    try {
+      const res = await fetch(`${API}/document-history`);
+      const data = await res.json();
+      setDocHistory(data.history || []);
+    } catch {
+      // non-critical
+    } finally {
+      setDocHistoryLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeTab === "history") fetchHistory();
-  }, [activeTab, fetchHistory]);
+    if (activeTab === "doc-history") fetchDocHistory();
+  }, [activeTab, fetchHistory, fetchDocHistory]);
+
+  const handleDocumentAnalyze = async (file) => {
+    setDocLoading(true);
+    setDocResult(null);
+    setDocError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch(`${API}/analyze-document`, { method: "POST", body: formData });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "Unknown error" }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setDocResult(data);
+    } catch (e) {
+      setDocError(e.message || "Failed to analyze document. Check that the backend is running.");
+    } finally {
+      setDocLoading(false);
+    }
+  };
 
   const handleAnalyze = async (file) => {
     setLoading(true);
@@ -58,17 +101,22 @@ export default function App() {
           <span style={styles.logoIcon}>🧠</span>
           <div>
             <h1 style={styles.logoTitle}>RAG Image Recognition</h1>
-            <p style={styles.logoSub}>Powered by Claude + ChromaDB</p>
+            <p style={styles.logoSub}>Powered by OpenRouter + ChromaDB</p>
           </div>
         </div>
         <nav style={styles.nav}>
-          {["analyze", "history"].map((tab) => (
+          {[
+            { id: "analyze", label: "🔍 Analyze" },
+            { id: "history", label: "📚 History" },
+            { id: "documents", label: "📄 Documents" },
+            { id: "doc-history", label: "🗂 Doc History" },
+          ].map(({ id, label }) => (
             <button
-              key={tab}
-              style={{ ...styles.navBtn, ...(activeTab === tab ? styles.navBtnActive : {}) }}
-              onClick={() => setActiveTab(tab)}
+              key={id}
+              style={{ ...styles.navBtn, ...(activeTab === id ? styles.navBtnActive : {}) }}
+              onClick={() => setActiveTab(id)}
             >
-              {tab === "analyze" ? "🔍 Analyze" : "📚 History"}
+              {label}
             </button>
           ))}
         </nav>
@@ -94,7 +142,7 @@ export default function App() {
               {loading && (
                 <div style={styles.placeholder}>
                   <div style={styles.bigSpinner} />
-                  <p style={styles.placeholderText}>Claude is analyzing your image...</p>
+                  <p style={styles.placeholderText}>Analyzing your image...</p>
                 </div>
               )}
               <ResultDisplay result={result} error={error} />
@@ -105,7 +153,7 @@ export default function App() {
         {activeTab === "history" && (
           <section style={styles.historySection}>
             <div style={styles.historyHeader}>
-              <h2 style={styles.panelTitle}>Past Analyses</h2>
+              <h2 style={styles.panelTitle}>Past Image Analyses</h2>
               <button style={styles.refreshBtn} onClick={fetchHistory} disabled={historyLoading}>
                 {historyLoading ? "Loading..." : "↻ Refresh"}
               </button>
@@ -113,10 +161,49 @@ export default function App() {
             <HistoryPanel history={history} />
           </section>
         )}
+
+        {activeTab === "documents" && (
+          <div style={styles.analyzeLayout}>
+            <section style={styles.panel}>
+              <h2 style={styles.panelTitle}>Upload Document</h2>
+              <DocumentUpload onAnalyze={handleDocumentAnalyze} loading={docLoading} />
+            </section>
+            <section style={styles.panel}>
+              <h2 style={styles.panelTitle}>
+                {docResult ? "Analysis Result" : "Waiting for document..."}
+              </h2>
+              {!docResult && !docError && !docLoading && (
+                <div style={styles.placeholder}>
+                  <span style={{ fontSize: 48 }}>👈</span>
+                  <p style={styles.placeholderText}>Upload a PDF, TXT, or DOCX to see the AI analysis here</p>
+                </div>
+              )}
+              {docLoading && (
+                <div style={styles.placeholder}>
+                  <div style={styles.bigSpinner} />
+                  <p style={styles.placeholderText}>Analyzing your document...</p>
+                </div>
+              )}
+              <DocumentResult result={docResult} error={docError} />
+            </section>
+          </div>
+        )}
+
+        {activeTab === "doc-history" && (
+          <section style={styles.historySection}>
+            <div style={styles.historyHeader}>
+              <h2 style={styles.panelTitle}>Past Document Analyses</h2>
+              <button style={styles.refreshBtn} onClick={fetchDocHistory} disabled={docHistoryLoading}>
+                {docHistoryLoading ? "Loading..." : "↻ Refresh"}
+              </button>
+            </div>
+            <HistoryPanel history={docHistory} />
+          </section>
+        )}
       </main>
 
       <footer style={styles.footer}>
-        RAG Image Recognition Agent — Claude claude-sonnet-4-6 + ChromaDB
+        RAG Image Recognition Agent — OpenRouter vision + ChromaDB
       </footer>
     </div>
   );
