@@ -11,9 +11,12 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from pydantic import BaseModel
+
 from rag_engine import RAGEngine
 from image_analyzer_service import ImageAnalyzerService
 from document_analyzer_service import DocumentAnalyzerService
+from agentic_location_service import AgenticLocationService
 
 # Initialize services
 rag = RAGEngine()
@@ -21,6 +24,8 @@ analyzer = ImageAnalyzerService(rag)
 
 doc_rag = RAGEngine(collection_name="document_analyses")
 doc_analyzer = DocumentAnalyzerService(doc_rag)
+
+location_service = AgenticLocationService()
 
 # Create FastAPI app
 app = FastAPI(title="RAG Image Recognition API")
@@ -103,6 +108,21 @@ async def analyze_document(file: UploadFile = File(...)):
 @app.get("/document-history")
 def get_document_history():
     return {"history": doc_rag.get_all()}
+
+
+class LocationSearchRequest(BaseModel):
+    query: str
+
+
+@app.post("/agentic-location/search")
+async def agentic_location_search(body: LocationSearchRequest):
+    if not body.query.strip():
+        raise HTTPException(status_code=400, detail="Query must not be empty.")
+    try:
+        result = await run_in_threadpool(location_service.search, body.query)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return JSONResponse(content=result)
 
 
 if __name__ == "__main__":
