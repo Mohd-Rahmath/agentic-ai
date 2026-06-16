@@ -237,7 +237,7 @@ async def run_agent(query: str) -> SearchResponse:
     for _ in range(max_iterations):
         response = _client.messages.create(
             model=MODEL,
-            max_tokens=4096,
+            max_tokens=1024,
             system=_AGENT_SYSTEM,
             tools=_TOOLS,
             messages=messages,
