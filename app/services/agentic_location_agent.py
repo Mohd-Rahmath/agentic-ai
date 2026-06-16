@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -98,17 +99,6 @@ _TOOLS: list[dict] = [
         },
     },
     {
-        "name": "get_place_phone",
-        "description": "Fetch the phone number for a specific place using its Google place_id.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "place_id": {"type": "string", "description": "Google Place ID"},
-            },
-            "required": ["place_id"],
-        },
-    },
-    {
         "name": "finish_search",
         "description": (
             "Call this when you have gathered all results and are ready to return them. "
@@ -143,8 +133,7 @@ Follow this workflow:
    - Custom/unusual types (farmhouse, resort, villa, retreat, orchard, etc.) → search_text_places
    - If nearby search returns fewer than 3 results → also call search_text_places as fallback
 3. Call search_text_places with a wider radius (3× the original) if initial results are sparse
-4. Call get_place_phone for the top 5 results (those with place_id)
-5. Call finish_search with all results and a summary
+4. Call finish_search with all results and a summary
 
 Important notes:
 - Convert radius_km to metres (multiply by 1000) when calling search tools
@@ -243,7 +232,6 @@ async def run_agent(query: str) -> SearchResponse:
     final_places: list[dict] = []
     final_summary: str = ""
     base_coords: BaseCoordinates | None = None
-    phones: dict[str, str | None] = {}
     max_iterations = 12
 
     for _ in range(max_iterations):
@@ -323,12 +311,6 @@ async def run_agent(query: str) -> SearchResponse:
                         "places": places,
                     }, default=str)
 
-                elif tool_name == "get_place_phone":
-                    detail = await get_place_details(tool_input["place_id"])
-                    phone = detail.get("formatted_phone_number") if isinstance(detail, dict) else None
-                    phones[tool_input["place_id"]] = phone
-                    result_content = json.dumps({"phone": phone})
-
                 elif tool_name == "finish_search":
                     final_places = tool_input.get("places") or []
                     final_summary = tool_input.get("summary", "")
@@ -377,9 +359,19 @@ async def run_agent(query: str) -> SearchResponse:
             continue
         if pid:
             seen_ids.add(pid)
-        if pid and pid in phones:
-            p["_phone"] = phones[pid]
         unique_places.append(p)
+
+    # Fetch phone numbers for top 5 results in parallel
+    _MAX_PHONES = 5
+    top_with_id = [p for p in unique_places if p.get("place_id")][:_MAX_PHONES]
+    if top_with_id:
+        phone_results = await asyncio.gather(
+            *[get_place_details(p["place_id"]) for p in top_with_id],
+            return_exceptions=True,
+        )
+        for place, detail in zip(top_with_id, phone_results):
+            if isinstance(detail, dict):
+                place["_phone"] = detail.get("formatted_phone_number")
 
     # Sort: inside radius first, then by rating desc
     def _sort_key(p: dict) -> tuple:
