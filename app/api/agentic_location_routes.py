@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 
 from app.schemas.agentic_location_schema import (
     ParseQueryResponse,
@@ -10,7 +11,7 @@ from app.schemas.agentic_location_schema import (
     SearchResponse,
 )
 from app.services.agents.query_understanding_agent import understand_query
-from app.services.agentic_location_agent import run_agent
+from app.services.agentic_location_agent import run_agent, stream_agent
 
 logger = logging.getLogger(__name__)
 
@@ -33,5 +34,19 @@ async def parse_query(body: QueryRequest):
 
 @router.post("/search", response_model=SearchResponse)
 async def search(body: QueryRequest):
-    """Run the full 7-step agentic search pipeline."""
+    """Run the full agentic search pipeline (blocking, returns complete response)."""
     return await run_agent(body.query)
+
+
+@router.post("/search/stream")
+async def search_stream(body: QueryRequest):
+    """Run the agentic search pipeline with real-time SSE streaming + RAG memory."""
+    return StreamingResponse(
+        stream_agent(body.query),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
