@@ -1,4 +1,4 @@
-import type { AgentStep, StepStatus } from '../../types/agenticLocation'
+import type { AgentStep, MemoryPayload, StepStatus } from '../../types/agenticLocation'
 
 const LABELS: Record<string, string> = {
   query_understanding: 'Understanding Query',
@@ -50,10 +50,13 @@ interface Props {
   steps: AgentStep[]
   activeTool?: string | null
   memoryContext?: string[] | null
+  memorySource?: 'lightrag' | 'chromadb' | null
 }
 
-export default function AgentThinkingPanel({ steps, activeTool, memoryContext }: Props) {
+export default function AgentThinkingPanel({ steps, activeTool, memoryContext, memorySource }: Props) {
   if (steps.length === 0 && !memoryContext?.length) return null
+
+  const isKG = memorySource === 'lightrag'
 
   return (
     <div className="flex flex-col gap-2">
@@ -61,13 +64,22 @@ export default function AgentThinkingPanel({ steps, activeTool, memoryContext }:
         Agent Workflow
       </h3>
 
-      {/* Memory banner */}
+      {/* Memory / KG banner */}
       {memoryContext && memoryContext.length > 0 && (
-        <div className="flex items-start gap-2 p-2.5 rounded-lg border border-violet-700/50 bg-violet-950/30 text-xs text-violet-300">
-          <span className="text-base flex-shrink-0">🧠</span>
+        <div className={`flex items-start gap-2 p-2.5 rounded-lg border text-xs ${
+          isKG
+            ? 'border-amber-700/50 bg-amber-950/30 text-amber-300'
+            : 'border-violet-700/50 bg-violet-950/30 text-violet-300'
+        }`}>
+          <span className="text-base flex-shrink-0">{isKG ? '🕸️' : '🧠'}</span>
           <div>
-            <span className="font-semibold">Memory found:</span>{' '}
-            {memoryContext.length} similar past search{memoryContext.length > 1 ? 'es' : ''} retrieved
+            <span className="font-semibold">
+              {isKG ? 'Knowledge Graph context retrieved' : 'Memory found:'}
+            </span>{' '}
+            {isKG
+              ? 'LightRAG synthesised context from past searches'
+              : `${memoryContext.length} similar past search${memoryContext.length > 1 ? 'es' : ''} retrieved`
+            }
           </div>
         </div>
       )}
