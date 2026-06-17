@@ -23,6 +23,7 @@ export default function AgenticLocationFinderPage() {
   const [steps, setSteps] = useState<AgentStep[]>([])
   const [activeTool, setActiveTool] = useState<string | null>(null)
   const [memoryContext, setMemoryContext] = useState<string[] | null>(null)
+  const [memorySource, setMemorySource] = useState<'lightrag' | 'chromadb' | null>(null)
   const [response, setResponse] = useState<SearchResponse | null>(null)
   const [apiError, setApiError] = useState<string | null>(null)
 
@@ -43,6 +44,7 @@ export default function AgenticLocationFinderPage() {
     setSteps([])
     setActiveTool(null)
     setMemoryContext(null)
+    setMemorySource(null)
     setResponse(null)
     setApiError(null)
 
@@ -52,6 +54,7 @@ export default function AgenticLocationFinderPage() {
           case 'memory': {
             const p = event.payload as MemoryPayload
             setMemoryContext(p.context)
+            setMemorySource(p.source)
             break
           }
           case 'step': {
@@ -134,6 +137,7 @@ export default function AgenticLocationFinderPage() {
                 steps={steps}
                 activeTool={activeTool}
                 memoryContext={memoryContext}
+                memorySource={memorySource}
               />
               {response?.parsed_query && (
                 <ParsedQueryPanel parsed={response.parsed_query} />
@@ -190,7 +194,7 @@ export default function AgenticLocationFinderPage() {
 
       {/* ── Footer ── */}
       <footer className="border-t border-gray-800 bg-gray-900/60 py-4 text-center text-xs text-gray-600">
-        Agentic Location Finder — Claude claude-sonnet-4-6 (Anthropic) + Google Maps API + RAG Memory
+        Agentic Location Finder — Claude claude-sonnet-4-6 + Google Maps API + LightRAG Knowledge Graph
       </footer>
     </div>
   )
