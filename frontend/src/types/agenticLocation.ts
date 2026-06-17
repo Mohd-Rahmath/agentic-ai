@@ -64,4 +64,5 @@ export interface ToolResultPayload {
 
 export interface MemoryPayload {
   context: string[]
+  source: 'lightrag' | 'chromadb'
 }
