@@ -42,4 +42,26 @@ export interface SearchResponse {
   results: LocationResult[]
   summary: string
   error?: string
+  memory_context?: string[] | null
+}
+
+// SSE streaming types
+export type SSEEventType = 'memory' | 'step' | 'tool_call' | 'tool_result' | 'result' | 'error'
+
+export interface SSEEvent {
+  type: SSEEventType
+  payload: unknown
+}
+
+export interface ToolCallPayload {
+  tool: string
+}
+
+export interface ToolResultPayload {
+  tool: string
+  summary: string
+}
+
+export interface MemoryPayload {
+  context: string[]
 }
