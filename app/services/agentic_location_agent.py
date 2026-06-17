@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from math import asin, cos, radians, sin, sqrt
+from typing import AsyncGenerator
 
 import anthropic
 
@@ -406,3 +407,240 @@ async def run_agent(query: str) -> SearchResponse:
         results=results,
         summary=final_summary,
     )
+
+
+# ── SSE helper ─────────────────────────────────────────────────────────────────
+
+def _sse(event_type: str, payload: dict) -> str:
+    return f"data: {json.dumps({'type': event_type, 'payload': payload}, default=str)}\n\n"
+
+
+def _step_sse(step_id: str, status: str, msg: str) -> str:
+    return _sse("step", {"step": step_id, "status": status, "message": msg})
+
+
+# ── Streaming agent ────────────────────────────────────────────────────────────
+
+async def stream_agent(query: str) -> AsyncGenerator[str, None]:
+    """Async generator that streams SSE events while running the agentic search."""
+    from app.services.rag import search_memory
+
+    steps: list[AgentStep] = []
+
+    def _record(step_id: str, status: str, msg: str) -> None:
+        s = AgentStep(step=step_id, status=status, message=msg)
+        for i, e in enumerate(steps):
+            if e.step == step_id:
+                steps[i] = s
+                return
+        steps.append(s)
+
+    # ── RAG memory ─────────────────────────────────────────────────────────
+    memories = search_memory.retrieve(query)
+    if memories:
+        yield _sse("memory", {"context": memories})
+
+    # ── 1. Query understanding ─────────────────────────────────────────────
+    _record("query_understanding", "running", "Parsing your search query with Claude AI...")
+    yield _step_sse("query_understanding", "running", "Parsing your search query with Claude AI...")
+    try:
+        raw = understand_query(query)
+        parsed = ParsedQuery(
+            intent=raw.get("intent", "nearby_place_search"),
+            place_type=raw.get("place_type", ""),
+            base_location=raw.get("base_location", ""),
+            radius_km=float(raw.get("radius_km") or 2),
+            city=raw.get("city"),
+            filters=raw.get("filters") or {},
+            confidence=float(raw.get("confidence") or 0.8),
+        )
+        msg = f"Understood: {parsed.place_type!r} near {parsed.base_location!r}, radius {parsed.radius_km} km"
+        _record("query_understanding", "completed", msg)
+        yield _step_sse("query_understanding", "completed", msg)
+    except Exception as exc:
+        logger.exception("Query understanding failed")
+        _record("query_understanding", "failed", str(exc))
+        yield _step_sse("query_understanding", "failed", str(exc))
+        yield _sse("error", {"message": "Could not understand the query. Please rephrase and try again."})
+        yield "data: [DONE]\n\n"
+        return
+
+    # ── 2. Validation ─────────────────────────────────────────────────────
+    _record("validation", "running", "Validating extracted information...")
+    yield _step_sse("validation", "running", "Validating extracted information...")
+    parsed_dict = parsed.model_dump()
+    val = validate_query(parsed_dict)
+    if not val["valid"]:
+        _record("validation", "failed", val["message"])
+        yield _step_sse("validation", "failed", val["message"])
+        yield _sse("error", {"message": val["message"]})
+        yield "data: [DONE]\n\n"
+        return
+    parsed = parsed.model_copy(update={"radius_km": parsed_dict["radius_km"]})
+    _record("validation", "completed", "All required fields present")
+    yield _step_sse("validation", "completed", "All required fields present")
+
+    # ── 3. Claude tool-use orchestration ──────────────────────────────────
+    _record("agentic_search", "running", "Claude AI is orchestrating the search...")
+    yield _step_sse("agentic_search", "running", "Claude AI is orchestrating the search...")
+
+    system = _AGENT_SYSTEM
+    if memories:
+        mem_text = "\n".join(f"- {m}" for m in memories)
+        system += f"\n\nRelevant past searches from memory:\n{mem_text}"
+
+    agent_query = json.dumps({
+        "place_type": parsed.place_type,
+        "base_location": parsed.base_location,
+        "radius_km": parsed.radius_km,
+        "city": parsed.city,
+    }, ensure_ascii=False)
+
+    messages: list[dict] = [{"role": "user", "content": agent_query}]
+    context: dict = {}
+    tool_call_log: list[str] = []
+    final_places: list[dict] = []
+    final_summary: str = ""
+    base_coords: BaseCoordinates | None = None
+
+    for _ in range(12):
+        response = _client.messages.create(
+            model=MODEL,
+            max_tokens=1024,
+            system=system,
+            tools=_TOOLS,
+            messages=messages,
+        )
+
+        messages.append({"role": "assistant", "content": response.content})
+
+        if response.stop_reason != "tool_use":
+            break
+
+        tool_results = []
+        for block in response.content:
+            if block.type != "tool_use":
+                continue
+
+            tool_name = block.name
+            tool_input = block.input
+            tool_call_log.append(tool_name)
+            logger.info("Claude tool: %s", tool_name)
+            yield _sse("tool_call", {"tool": tool_name})
+
+            try:
+                if tool_name == "geocode_location":
+                    locs = await geocode_location(tool_input["location"], tool_input.get("city"))
+                    if locs:
+                        base_coords = BaseCoordinates(lat=locs[0]["lat"], lng=locs[0]["lng"])
+                        result_content = json.dumps({"success": True, "lat": locs[0]["lat"], "lng": locs[0]["lng"], "formatted_address": locs[0]["formatted_address"]})
+                        yield _sse("tool_result", {"tool": tool_name, "summary": f"Resolved to {locs[0]['formatted_address']}"})
+                    else:
+                        result_content = json.dumps({"success": False, "error": "Location not found"})
+                        yield _sse("tool_result", {"tool": tool_name, "summary": "Location not found"})
+
+                elif tool_name == "search_nearby_places":
+                    places = await nearby_search(lat=tool_input["lat"], lng=tool_input["lng"], radius_m=int(tool_input["radius_m"]), keyword=tool_input["keyword"])
+                    context.setdefault("all_places", []).extend(places)
+                    result_content = json.dumps({"success": True, "count": len(places), "places": places}, default=str)
+                    yield _sse("tool_result", {"tool": tool_name, "summary": f"Found {len(places)} nearby places"})
+
+                elif tool_name == "search_text_places":
+                    location_str = f"{tool_input['lat']},{tool_input['lng']}"
+                    places = await text_search(query=tool_input["query"], location=location_str, radius_m=int(tool_input["radius_m"]))
+                    context.setdefault("all_places", []).extend(places)
+                    result_content = json.dumps({"success": True, "count": len(places), "places": places}, default=str)
+                    yield _sse("tool_result", {"tool": tool_name, "summary": f"Found {len(places)} places via text search"})
+
+                elif tool_name == "finish_search":
+                    final_places = tool_input.get("places") or []
+                    final_summary = tool_input.get("summary", "")
+                    result_content = json.dumps({"success": True})
+
+                else:
+                    result_content = json.dumps({"error": f"Unknown tool: {tool_name}"})
+
+            except Exception as exc:
+                logger.exception("Tool %s failed", tool_name)
+                result_content = json.dumps({"error": str(exc)})
+
+            tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": result_content})
+
+        messages.append({"role": "user", "content": tool_results})
+
+        if "finish_search" in tool_call_log:
+            break
+
+    unique_tools = list(dict.fromkeys(tool_call_log))
+    search_msg = f"Claude used {len(unique_tools)} tools: {', '.join(unique_tools)}"
+    _record("agentic_search", "completed", search_msg)
+    yield _step_sse("agentic_search", "completed", search_msg)
+
+    if base_coords is None:
+        yield _sse("error", {"message": "Could not resolve the location. Please provide a more specific address."})
+        yield "data: [DONE]\n\n"
+        return
+
+    # Deduplicate
+    seen_ids: set[str] = set()
+    unique_places: list[dict] = []
+    for p in final_places:
+        pid = p.get("place_id", "")
+        if pid and pid in seen_ids:
+            continue
+        if pid:
+            seen_ids.add(pid)
+        unique_places.append(p)
+
+    # Parallel phone lookups
+    top_with_id = [p for p in unique_places if p.get("place_id")][:5]
+    if top_with_id:
+        phone_results = await asyncio.gather(
+            *[get_place_details(p["place_id"]) for p in top_with_id],
+            return_exceptions=True,
+        )
+        for place, detail in zip(top_with_id, phone_results):
+            if isinstance(detail, dict):
+                place["_phone"] = detail.get("formatted_phone_number")
+
+    def _sort_key(p: dict) -> tuple:
+        loc = p.get("geometry", {}).get("location", {})
+        lat = loc.get("lat") or p.get("lat")
+        lng = loc.get("lng") or p.get("lng")
+        dist = _haversine(base_coords.lat, base_coords.lng, lat, lng) if (lat and lng) else 999
+        return (int(dist > parsed.radius_km), dist, -(p.get("rating") or 0))
+
+    unique_places.sort(key=_sort_key)
+    results = [_build_result(p, base_coords.lat, base_coords.lng, parsed.radius_km) for p in unique_places]
+    inside_count = sum(1 for r in results if not r.outside_requested_radius)
+
+    if not final_summary:
+        final_summary = (
+            f"Found {len(results)} {parsed.place_type}(s) near {parsed.base_location}. "
+            f"{inside_count} within {parsed.radius_km} km."
+            if results else
+            f"No {parsed.place_type}s found near {parsed.base_location} "
+            f"within {parsed.radius_km} km. Try increasing the radius."
+        )
+
+    # Store in RAG memory
+    search_memory.store(
+        query=query,
+        place_type=parsed.place_type,
+        location=parsed.base_location,
+        radius_km=parsed.radius_km,
+        result_count=len(results),
+        summary=final_summary,
+    )
+
+    final_response = SearchResponse(
+        agent_steps=steps,
+        parsed_query=parsed,
+        base_coordinates=base_coords,
+        results=results,
+        summary=final_summary,
+        memory_context=memories if memories else None,
+    )
+
+    yield _sse("result", final_response.model_dump())
+    yield "data: [DONE]\n\n"
