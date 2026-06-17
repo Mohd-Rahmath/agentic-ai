@@ -423,7 +423,7 @@ def _step_sse(step_id: str, status: str, msg: str) -> str:
 
 async def stream_agent(query: str) -> AsyncGenerator[str, None]:
     """Async generator that streams SSE events while running the agentic search."""
-    from app.services.rag import search_memory
+    from app.services.rag import lightrag_memory, search_memory
 
     steps: list[AgentStep] = []
 
@@ -435,10 +435,14 @@ async def stream_agent(query: str) -> AsyncGenerator[str, None]:
                 return
         steps.append(s)
 
-    # ── RAG memory ─────────────────────────────────────────────────────────
-    memories = search_memory.retrieve(query)
+    # ── Knowledge Graph memory (LightRAG → ChromaDB fallback) ──────────────
+    memories = await lightrag_memory.retrieve(query)
+    mem_source = "lightrag"
+    if not memories:
+        memories = search_memory.retrieve(query)
+        mem_source = "chromadb"
     if memories:
-        yield _sse("memory", {"context": memories})
+        yield _sse("memory", {"context": memories, "source": mem_source})
 
     # ── 1. Query understanding ─────────────────────────────────────────────
     _record("query_understanding", "running", "Parsing your search query with Claude AI...")
@@ -486,8 +490,12 @@ async def stream_agent(query: str) -> AsyncGenerator[str, None]:
 
     system = _AGENT_SYSTEM
     if memories:
-        mem_text = "\n".join(f"- {m}" for m in memories)
-        system += f"\n\nRelevant past searches from memory:\n{mem_text}"
+        if mem_source == "lightrag":
+            # LightRAG returns rich KG-synthesised context as a single paragraph
+            system += f"\n\nKnowledge Graph Context (from past searches about this area):\n{memories[0]}"
+        else:
+            mem_text = "\n".join(f"- {m}" for m in memories)
+            system += f"\n\nRelevant past searches from memory:\n{mem_text}"
 
     agent_query = json.dumps({
         "place_type": parsed.place_type,
@@ -623,16 +631,6 @@ async def stream_agent(query: str) -> AsyncGenerator[str, None]:
             f"within {parsed.radius_km} km. Try increasing the radius."
         )
 
-    # Store in RAG memory
-    search_memory.store(
-        query=query,
-        place_type=parsed.place_type,
-        location=parsed.base_location,
-        radius_km=parsed.radius_km,
-        result_count=len(results),
-        summary=final_summary,
-    )
-
     final_response = SearchResponse(
         agent_steps=steps,
         parsed_query=parsed,
@@ -642,5 +640,25 @@ async def stream_agent(query: str) -> AsyncGenerator[str, None]:
         memory_context=memories if memories else None,
     )
 
+    # Yield result first so user doesn't wait for KG indexing
     yield _sse("result", final_response.model_dump())
     yield "data: [DONE]\n\n"
+
+    # Store in both knowledge graph (background) and ChromaDB (fast fallback)
+    results_dicts = [r.model_dump() for r in results]
+    asyncio.create_task(lightrag_memory.store(
+        query=query,
+        place_type=parsed.place_type,
+        location=parsed.base_location,
+        radius_km=parsed.radius_km,
+        results=results_dicts,
+        summary=final_summary,
+    ))
+    search_memory.store(
+        query=query,
+        place_type=parsed.place_type,
+        location=parsed.base_location,
+        radius_km=parsed.radius_km,
+        result_count=len(results),
+        summary=final_summary,
+    )
