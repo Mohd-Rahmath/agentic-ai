@@ -8,6 +8,14 @@ const LABELS: Record<string, string> = {
   places_search: 'Searching Google Places',
   result_verification: 'Verifying & Filtering',
   ranking: 'Ranking Results',
+  agentic_search: 'Claude AI Search',
+}
+
+const TOOL_ICONS: Record<string, string> = {
+  geocode_location: '📍',
+  search_nearby_places: '🔍',
+  search_text_places: '🔎',
+  finish_search: '✅',
 }
 
 function StatusIcon({ status }: { status: StepStatus }) {
@@ -40,16 +48,30 @@ function badgeStyle(status: StepStatus): string {
 
 interface Props {
   steps: AgentStep[]
+  activeTool?: string | null
+  memoryContext?: string[] | null
 }
 
-export default function AgentThinkingPanel({ steps }: Props) {
-  if (steps.length === 0) return null
+export default function AgentThinkingPanel({ steps, activeTool, memoryContext }: Props) {
+  if (steps.length === 0 && !memoryContext?.length) return null
 
   return (
     <div className="flex flex-col gap-2">
       <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
         Agent Workflow
       </h3>
+
+      {/* Memory banner */}
+      {memoryContext && memoryContext.length > 0 && (
+        <div className="flex items-start gap-2 p-2.5 rounded-lg border border-violet-700/50 bg-violet-950/30 text-xs text-violet-300">
+          <span className="text-base flex-shrink-0">🧠</span>
+          <div>
+            <span className="font-semibold">Memory found:</span>{' '}
+            {memoryContext.length} similar past search{memoryContext.length > 1 ? 'es' : ''} retrieved
+          </div>
+        </div>
+      )}
+
       {steps.map((step, i) => (
         <div key={i} className={rowStyle(step.status)}>
           <div className="flex-shrink-0 w-5 h-5 flex items-center justify-center mt-0.5">
@@ -63,6 +85,14 @@ export default function AgentThinkingPanel({ steps }: Props) {
               <span className={badgeStyle(step.status)}>{step.status}</span>
             </div>
             <p className="text-xs text-gray-400 mt-0.5 line-clamp-2">{step.message}</p>
+
+            {/* Show active tool under agentic_search while running */}
+            {step.step === 'agentic_search' && step.status === 'running' && activeTool && (
+              <div className="flex items-center gap-1.5 mt-1.5 text-xs text-indigo-400">
+                <span>{TOOL_ICONS[activeTool] ?? '⚙️'}</span>
+                <span className="font-mono">{activeTool}</span>
+              </div>
+            )}
           </div>
         </div>
       ))}
