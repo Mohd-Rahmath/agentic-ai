@@ -60,3 +60,4 @@ class SearchResponse(BaseModel):
     results: list[LocationResult] = Field(default_factory=list)
     summary: str = ""
     error: str | None = None
+    memory_context: list[str] | None = None
